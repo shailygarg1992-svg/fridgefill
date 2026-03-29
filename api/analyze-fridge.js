@@ -84,6 +84,12 @@ RULES:
 - Only suggest items from purchase history. Never suggest random items.
 - For $35 filler: prioritize pull-forward staples (needed in 1-2 orders), then long-shelf-life items. Never suggest extra perishables.
 
+CRITICAL PRICING RULES:
+- "unit_price" must be the price for ONE unit of the item (not multiplied by qty)
+- "qty" is how many units to buy
+- The line total = unit_price × qty. You must ensure estimated_total equals the sum of all (unit_price × qty).
+- Reference prices from purchase history: a2 Milk=$3.93/each, 2% Milk=$2.70/each, Eggs=$3.93/each, Bread=$1.95/each, Apples=$3.34/bag, Pears=$3.34/bag, Spinach=$3.64/each, Bananas=$1.47/bunch, Cheese=$2.14/each, Chickpeas=$0.77/can, Diapers=$24.64/pack
+
 Respond with ONLY valid JSON (no markdown, no code fences):
 {
   "fridge_contents": [
@@ -94,24 +100,24 @@ Respond with ONLY valid JSON (no markdown, no code fences):
       "item": "exact product name from history",
       "urgency": "need_now|need_soon|dont_forget",
       "reason": "brief explanation",
-      "qty": number,
-      "est_price": number,
+      "qty": 1,
+      "unit_price": 3.93,
       "walmart_search": "https://www.walmart.com/search?q=URL+encoded+product+name"
     }
   ],
-  "estimated_total": number,
+  "estimated_total": 0,
   "free_delivery": {
     "threshold": 35.00,
-    "current_total": number,
-    "gap": number,
+    "current_total": 0,
+    "gap": 0,
     "status": "met|needs_filler|too_low",
     "filler_suggestions": [
       {
         "item": "product name",
         "reason": "why this is a smart filler",
         "strategy": "pull_forward_staple|long_shelf_life|non_grocery_need",
-        "est_price": number,
-        "qty": number,
+        "unit_price": 0,
+        "qty": 1,
         "walmart_search": "https://www.walmart.com/search?q=URL+encoded+product+name"
       }
     ],

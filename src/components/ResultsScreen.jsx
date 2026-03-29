@@ -2,6 +2,15 @@ import { useState, useMemo } from 'react'
 import { FREE_DELIVERY_THRESHOLD, DELIVERY_FEE } from '../data/staples'
 import { getWalmartLink } from '../utils/api'
 
+// Get the per-unit price from an item, handling both old and new field names
+function getUnitPrice(item) {
+  return item.unit_price || item.est_price || 0
+}
+
+function getLineTotal(item) {
+  return getUnitPrice(item) * (item.qty || 1)
+}
+
 function DeliveryProgressBar({ total, threshold }) {
   const pct = Math.min((total / threshold) * 100, 100)
   const met = total >= threshold
@@ -32,6 +41,10 @@ function ItemRow({ item, onToggle, included }) {
     ? item.walmart_search
     : getWalmartLink(item.walmart_search || item.item)
 
+  const unitPrice = getUnitPrice(item)
+  const qty = item.qty || 1
+  const lineTotal = unitPrice * qty
+
   return (
     <div className={`flex items-center gap-3 py-2.5 border-b border-gray-100 last:border-0 transition-opacity ${included ? '' : 'opacity-30'}`}>
       <button onClick={onToggle} className="shrink-0">
@@ -46,10 +59,13 @@ function ItemRow({ item, onToggle, included }) {
 
       <div className="flex-1 min-w-0">
         <p className="text-sm text-gray-900 truncate">{item.item}</p>
+        <p className="text-xs text-gray-400">
+          {qty > 1 ? `${qty} x $${unitPrice.toFixed(2)}` : `$${unitPrice.toFixed(2)}`}
+        </p>
       </div>
 
-      <span className="text-sm text-gray-600 shrink-0">
-        ${((item.est_price || 0) * (item.qty || 1)).toFixed(2)}
+      <span className="text-sm font-medium text-gray-900 shrink-0">
+        ${lineTotal.toFixed(2)}
       </span>
 
       <a
@@ -85,7 +101,7 @@ export default function ResultsScreen({ results, onBack }) {
     let total = 0
     for (const item of [...allRestock, ...fillers]) {
       if (!dismissedIds.has(item.item)) {
-        total += (item.est_price || 0) * (item.qty || 1)
+        total += getLineTotal(item)
       }
     }
     return total
@@ -96,14 +112,14 @@ export default function ResultsScreen({ results, onBack }) {
   const copyList = () => {
     const items = allRestock
       .filter((i) => !dismissedIds.has(i.item))
-      .map((i) => `${i.item} (x${i.qty})`)
+      .map((i) => `${i.item} (x${i.qty || 1})`)
     navigator.clipboard?.writeText(items.join('\n'))
   }
 
   return (
     <div className="min-h-screen bg-white pb-28">
       {/* Header */}
-      <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-4 py-3">
+      <div className="sticky top-0 z-10 bg-white border-b border-gray-100 px-4 pt-14 pb-3">
         <div className="flex items-center justify-between">
           <button onClick={onBack} className="text-green-600 font-medium text-sm">
             Done
@@ -122,7 +138,7 @@ export default function ResultsScreen({ results, onBack }) {
         {allRestock.length > 0 && (
           <div className="mb-4">
             <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-              Recommended Items
+              Recommended Items ({allRestock.filter(i => !dismissedIds.has(i.item)).length})
             </h3>
             {allRestock.map((item) => (
               <ItemRow
@@ -145,26 +161,31 @@ export default function ResultsScreen({ results, onBack }) {
               <span className="text-xs text-gray-400">(${gap.toFixed(2)} more)</span>
             </div>
             <div className="bg-amber-50 rounded-xl p-3 border border-amber-100">
-              {fillers.map((item) => (
-                <div key={item.item} className={`flex items-center gap-3 py-2 border-b border-amber-100 last:border-0 transition-opacity ${!dismissedIds.has(item.item) ? '' : 'opacity-30'}`}>
-                  <button onClick={() => toggleItem(item.item)} className="shrink-0">
-                    <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${!dismissedIds.has(item.item) ? 'bg-amber-500 border-amber-500' : 'border-gray-300'}`}>
-                      {!dismissedIds.has(item.item) && (
-                        <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                        </svg>
-                      )}
+              {fillers.map((item) => {
+                const included = !dismissedIds.has(item.item)
+                const unitPrice = getUnitPrice(item)
+                const qty = item.qty || 1
+                return (
+                  <div key={item.item} className={`flex items-center gap-3 py-2 border-b border-amber-100 last:border-0 transition-opacity ${included ? '' : 'opacity-30'}`}>
+                    <button onClick={() => toggleItem(item.item)} className="shrink-0">
+                      <div className={`w-5 h-5 rounded border-2 flex items-center justify-center ${included ? 'bg-amber-500 border-amber-500' : 'border-gray-300'}`}>
+                        {included && (
+                          <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" strokeWidth="3" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </div>
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-gray-900 truncate">{item.item}</p>
+                      <p className="text-xs text-amber-700">{item.reason}</p>
                     </div>
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm text-gray-900 truncate">{item.item}</p>
-                    <p className="text-xs text-amber-700">{item.reason}</p>
+                    <span className="text-sm font-medium text-gray-900 shrink-0">
+                      ${(unitPrice * qty).toFixed(2)}
+                    </span>
                   </div>
-                  <span className="text-sm text-gray-600 shrink-0">
-                    ${((item.est_price || 0) * (item.qty || 1)).toFixed(2)}
-                  </span>
-                </div>
-              ))}
+                )
+              })}
             </div>
           </div>
         )}
