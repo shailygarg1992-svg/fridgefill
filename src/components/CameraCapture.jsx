@@ -17,7 +17,7 @@ export default function CameraCapture({ photos, onCapture, onAnalyze, onBack, er
   return (
     <div className="min-h-screen flex flex-col bg-gray-900">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 bg-gray-900/90 backdrop-blur">
+      <div className="flex items-center justify-between px-4 pt-14 pb-3 bg-gray-900/90 backdrop-blur">
         <button onClick={onBack} className="text-white text-sm font-medium px-3 py-1">
           Cancel
         </button>
