@@ -21,12 +21,11 @@ export async function analyzeFridge(images) {
 
 export function imageToBase64(file, maxWidth = 1024, quality = 0.7) {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const img = new Image();
-      img.onload = () => {
+    // Use createImageBitmap for broad format support (including HEIC on iOS)
+    createImageBitmap(file)
+      .then((bitmap) => {
         const canvas = document.createElement('canvas');
-        let { width, height } = img;
+        let { width, height } = bitmap;
         if (width > maxWidth) {
           height = Math.round((height * maxWidth) / width);
           width = maxWidth;
@@ -34,19 +33,40 @@ export function imageToBase64(file, maxWidth = 1024, quality = 0.7) {
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        const base64 = dataUrl.split(',')[1];
-        if (!base64) {
-          reject(new Error('Failed to compress image'));
-          return;
-        }
-        resolve(base64);
-      };
-      img.onerror = () => reject(new Error('Failed to load image'));
-      img.src = reader.result;
+        ctx.drawImage(bitmap, 0, 0, width, height);
+        bitmap.close();
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              // Fallback: send original file as-is
+              fallbackRaw(file).then(resolve, reject);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result.split(',')[1]);
+            reader.onerror = () => fallbackRaw(file).then(resolve, reject);
+            reader.readAsDataURL(blob);
+          },
+          'image/jpeg',
+          quality
+        );
+      })
+      .catch(() => {
+        // Final fallback: send the raw file
+        fallbackRaw(file).then(resolve, reject);
+      });
+  });
+}
+
+function fallbackRaw(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(',')[1];
+      if (!base64) reject(new Error('Failed to read image'));
+      else resolve(base64);
     };
-    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.onerror = () => reject(new Error('Failed to read image'));
     reader.readAsDataURL(file);
   });
 }
