@@ -2,22 +2,89 @@ import Anthropic from '@anthropic-ai/sdk';
 
 const client = new Anthropic();
 
-const SYSTEM_PROMPT = `You are a grocery inventory analyst and smart budget optimizer for a family that shops at Walmart.
+const PURCHASE_HISTORY = [
+  {
+    date: '2026-03-05',
+    items: [
+      { name: 'Great Value Raw Honey, 16 oz', qty: 1, price: 5.64 },
+      { name: 'Pampers Splashers Swim Diapers Size S', qty: 1, price: 9.97 },
+      { name: 'Great Value 100% Whole Wheat Bread, 20 oz', qty: 1, price: 1.95 },
+      { name: 'Great Value 2% Reduced Fat Milk, Gallon', qty: 2, price: 5.40 },
+      { name: 'a2 Milk Vitamin D Whole Milk, 59 oz', qty: 2, price: 7.86 },
+      { name: 'Fresh Bartlett Pears, 3 lb Bag', qty: 1, price: 3.34 },
+      { name: 'Fresh Fuji Apples, 3 lb Bag', qty: 1, price: 3.34 },
+    ],
+  },
+  {
+    date: '2026-03-14',
+    items: [
+      { name: 'Fresh Strawberries, 1 lb', qty: 1, price: 2.50 },
+      { name: 'Marketside Fresh Organic Bananas, Bunch', qty: 1, price: 1.47 },
+      { name: 'Great Value Vegetable Oil, 1 Gallon', qty: 1, price: 8.43 },
+      { name: 'Great Value Mild Cheddar Shredded Cheese, 8 oz', qty: 2, price: 4.28 },
+      { name: 'Great Value Ranch Dressing, 16 fl oz', qty: 1, price: 2.18 },
+      { name: 'Great Value 2% Reduced Fat Milk, Gallon', qty: 2, price: 5.40 },
+      { name: 'a2 Milk Vitamin D Whole Milk, 59 oz', qty: 2, price: 7.86 },
+      { name: 'Marketside Cage-Free Large Brown Eggs, 18 ct', qty: 1, price: 3.93 },
+    ],
+  },
+  {
+    date: '2026-03-18',
+    items: [
+      { name: 'Welchs Mixed Fruit Snacks', qty: 1, price: 1.98 },
+      { name: 'Fresh Red Seedless Grapes, 3 lb Bag', qty: 1, price: 5.48 },
+      { name: "L'Oreal Paris Superior Preference Hair Color", qty: 1, price: 8.97 },
+      { name: 'Sargento String Cheese, 12 ct', qty: 1, price: 4.48 },
+      { name: 'Great Value 100% Whole Wheat Bread, 20 oz', qty: 1, price: 1.95 },
+      { name: 'Zote Laundry Bar Soap, Pink, 14.1 oz', qty: 1, price: 1.24 },
+      { name: 'Marketside Fresh Spinach and Spring Mix, 11 oz', qty: 1, price: 3.64 },
+      { name: 'Barbasol Original Shaving Cream, 10 oz', qty: 1, price: 2.17 },
+      { name: 'Ball Park Classic Hamburger Buns, 8 ct', qty: 1, price: 2.38 },
+      { name: 'a2 Milk Vitamin D Whole Milk, 59 oz', qty: 2, price: 7.86 },
+      { name: 'Fresh Fuji Apples, 3 lb Bag', qty: 1, price: 3.34 },
+      { name: 'Marketside Fresh Organic Bananas, Bunch', qty: 1, price: 0.88 },
+    ],
+  },
+  {
+    date: '2026-03-21',
+    items: [
+      { name: "Parent's Choice Diapers Size 4, 192 ct", qty: 1, price: 24.64 },
+      { name: 'Great Value 2% Reduced Fat Milk, Gallon', qty: 2, price: 5.40 },
+      { name: 'a2 Milk Vitamin D Whole Milk, 59 oz', qty: 2, price: 7.86 },
+    ],
+  },
+  {
+    date: '2026-03-25',
+    items: [
+      { name: 'Marketside Fresh Organic Bananas, Bunch', qty: 1, price: 1.47 },
+      { name: 'Marketside Fresh Spinach and Spring Mix, 11 oz', qty: 1, price: 3.64 },
+      { name: 'Marketside Cage-Free Large Brown Eggs, 18 ct', qty: 1, price: 3.93 },
+      { name: 'a2 Milk Vitamin D Whole Milk, 59 oz', qty: 2, price: 7.86 },
+      { name: 'Great Value 2% Reduced Fat Milk, Gallon', qty: 2, price: 5.40 },
+      { name: 'Great Value Mango Chunks, 16 oz (Frozen)', qty: 1, price: 3.07 },
+      { name: 'Great Value Triple Berry Blend, 48 oz (Frozen)', qty: 1, price: 10.15 },
+      { name: 'Great Value Garbanzos Chick Peas, 15.5 oz', qty: 10, price: 7.70 },
+      { name: 'Fresh Navel Oranges, 4 lb Bag', qty: 1, price: 4.27 },
+      { name: 'Fresh Gold Potatoes, 5 lb Bag', qty: 1, price: 3.87 },
+      { name: 'Fresh Fuji Apples, 3 lb Bag', qty: 1, price: 3.34 },
+      { name: 'Fresh Bartlett Pears, 3 lb Bag', qty: 1, price: 3.34 },
+    ],
+  },
+];
+
+const SYSTEM_PROMPT = `You are a grocery inventory analyst for a family that shops at Walmart.
 
 Your job:
-1. Analyze fridge photo(s) to identify items visible and estimate their quantity level (full, half, low, empty).
-2. Cross-reference what you see against the user's purchase history to determine what needs restocking.
-3. Flag non-fridge items (pantry, frozen, baby, household) that are due for reorder based on purchase frequency.
+1. Analyze the fridge photo(s) to identify items and estimate quantity levels (full, half, low, empty).
+2. Cross-reference against purchase history to determine what needs restocking.
+3. Flag non-fridge items (pantry, frozen, baby, household) due for reorder based on purchase frequency.
 4. Optimize for Walmart's $35 free delivery threshold with smart filler suggestions.
-5. Detect strategic buy opportunities where items are significantly cheaper than baseline.
 
-IMPORTANT RULES:
-- Only suggest items from the user's purchase history. Never suggest random items.
-- For the $35 filler: prioritize pull-forward staples (items needed in 1-2 orders), then long-shelf-life items, then non-grocery needs. Never suggest extra perishables.
-- For strategic buys: only recommend stocking up on non-perishable or frozen items. For perishables on sale, recommend normal quantity.
-- Be conservative with confidence scores.
+RULES:
+- Only suggest items from purchase history. Never suggest random items.
+- For $35 filler: prioritize pull-forward staples (needed in 1-2 orders), then long-shelf-life items. Never suggest extra perishables.
 
-You MUST respond with valid JSON matching this exact schema (no markdown, no code fences, just raw JSON):
+Respond with ONLY valid JSON (no markdown, no code fences):
 {
   "fridge_contents": [
     { "item": "string", "status": "full|half|low|empty|not_found", "confidence": 0.0-1.0 }
@@ -25,12 +92,11 @@ You MUST respond with valid JSON matching this exact schema (no markdown, no cod
   "restock_list": [
     {
       "item": "exact product name from history",
-      "id": "staple id",
       "urgency": "need_now|need_soon|dont_forget",
       "reason": "brief explanation",
       "qty": number,
       "est_price": number,
-      "walmart_search": "pre-built walmart search URL"
+      "walmart_search": "https://www.walmart.com/search?q=URL+encoded+product+name"
     }
   ],
   "estimated_total": number,
@@ -42,30 +108,15 @@ You MUST respond with valid JSON matching this exact schema (no markdown, no cod
     "filler_suggestions": [
       {
         "item": "product name",
-        "id": "staple id",
         "reason": "why this is a smart filler",
         "strategy": "pull_forward_staple|long_shelf_life|non_grocery_need",
         "est_price": number,
         "qty": number,
-        "walmart_search": "walmart search URL"
+        "walmart_search": "https://www.walmart.com/search?q=URL+encoded+product+name"
       }
     ],
     "recommendation": "brief recommendation text"
-  },
-  "strategic_buys": [
-    {
-      "item": "product name",
-      "id": "staple id",
-      "baseline_price": number,
-      "current_price": number,
-      "discount_pct": number,
-      "savings_per_unit": number,
-      "recommended_qty": number,
-      "total_savings": number,
-      "reason": "explanation",
-      "walmart_search": "walmart search URL"
-    }
-  ]
+  }
 }`;
 
 export default async function handler(req, res) {
@@ -74,7 +125,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { images, purchase_history, today } = req.body;
+    const { images, today } = req.body;
 
     if (!images || images.length === 0) {
       return res.status(400).json({ error: 'At least one image is required' });
@@ -83,6 +134,7 @@ export default async function handler(req, res) {
     const content = [];
 
     for (const img of images) {
+      if (!img || img.length === 0) continue;
       content.push({
         type: 'image',
         source: {
@@ -93,26 +145,30 @@ export default async function handler(req, res) {
       });
     }
 
+    if (content.length === 0) {
+      return res.status(400).json({ error: 'No valid images received' });
+    }
+
     content.push({
       type: 'text',
       text: `Today's date: ${today}
 
-Here is the user's complete Walmart purchase history:
-${JSON.stringify(purchase_history, null, 2)}
+Purchase history:
+${JSON.stringify(PURCHASE_HISTORY, null, 2)}
 
-Known staple baseline prices for strategic buy detection:
-- a2 Milk Vitamin D Whole Milk, 59 oz: $3.93/each (perishable)
+Baseline prices:
+- a2 Milk Vitamin D Whole Milk, 59 oz: $3.93 (perishable)
 - Great Value 2% Reduced Fat Milk, Gallon: $2.70 (perishable)
-- Marketside Cage-Free Large Brown Eggs, 18 ct: $3.93 (moderate shelf life)
+- Marketside Cage-Free Large Brown Eggs, 18 ct: $3.93
 - Fresh Fuji Apples, 3 lb Bag: $3.34 (perishable)
-- Great Value Garbanzos Chick Peas, 15.5 oz: $0.77/can (non-perishable, great to stock up)
-- Great Value Triple Berry Blend, 48 oz (Frozen): $10.15 (frozen, great to stock up)
-- Great Value Mango Chunks, 16 oz (Frozen): $3.07 (frozen, great to stock up)
-- Great Value Raw Honey, 16 oz: $5.64 (non-perishable, great to stock up)
-- Great Value Vegetable Oil, 1 Gallon: $8.43 (non-perishable, great to stock up)
-- Parent's Choice Diapers Size 4, 192 ct: $24.64 (non-perishable, great to stock up)
+- Great Value Garbanzos Chick Peas, 15.5 oz: $0.77/can (non-perishable)
+- Great Value Triple Berry Blend, 48 oz (Frozen): $10.15
+- Great Value Mango Chunks, 16 oz (Frozen): $3.07
+- Great Value Raw Honey, 16 oz: $5.64 (non-perishable)
+- Great Value Vegetable Oil, 1 Gallon: $8.43 (non-perishable)
+- Parent's Choice Diapers Size 4, 192 ct: $24.64
 
-Analyze the fridge photo(s). Identify everything visible, estimate quantity levels, determine what needs restocking based on purchase patterns and what you see, and generate the complete restock recommendation with free delivery optimization. Return ONLY valid JSON.`,
+Analyze the fridge photo(s), identify items and quantity levels, determine restocking needs, and generate the restock list with free delivery optimization. Return ONLY valid JSON.`,
     });
 
     const response = await client.messages.create({

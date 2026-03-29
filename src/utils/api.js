@@ -1,12 +1,9 @@
-import { ORDER_HISTORY } from '../data/staples';
-
 export async function analyzeFridge(images) {
   const response = await fetch('/api/analyze-fridge', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       images,
-      purchase_history: ORDER_HISTORY,
       today: new Date().toISOString().split('T')[0],
     }),
   });
@@ -19,56 +16,51 @@ export async function analyzeFridge(images) {
   return response.json();
 }
 
-export function imageToBase64(file, maxWidth = 1024, quality = 0.7) {
-  return new Promise((resolve, reject) => {
-    // Use createImageBitmap for broad format support (including HEIC on iOS)
-    createImageBitmap(file)
-      .then((bitmap) => {
-        const canvas = document.createElement('canvas');
-        let { width, height } = bitmap;
-        if (width > maxWidth) {
-          height = Math.round((height * maxWidth) / width);
-          width = maxWidth;
-        }
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(bitmap, 0, 0, width, height);
-        bitmap.close();
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) {
-              // Fallback: send original file as-is
-              fallbackRaw(file).then(resolve, reject);
-              return;
-            }
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result.split(',')[1]);
-            reader.onerror = () => fallbackRaw(file).then(resolve, reject);
-            reader.readAsDataURL(blob);
-          },
-          'image/jpeg',
-          quality
-        );
-      })
-      .catch(() => {
-        // Final fallback: send the raw file
-        fallbackRaw(file).then(resolve, reject);
-      });
-  });
+// Target: each image under 300KB base64 (~225KB binary)
+// Vercel limit is 4.5MB total request body
+const MAX_BASE64_LENGTH = 300_000;
+
+export async function imageToBase64(file) {
+  const bitmap = await createImageBitmap(file);
+  let maxDim = 800;
+  let quality = 0.6;
+
+  // Try progressively smaller sizes until under limit
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const base64 = compressBitmap(bitmap, maxDim, quality);
+    if (base64.length <= MAX_BASE64_LENGTH) {
+      bitmap.close();
+      return base64;
+    }
+    // Reduce size for next attempt
+    maxDim = Math.round(maxDim * 0.7);
+    quality = Math.max(quality - 0.1, 0.3);
+  }
+
+  // Final attempt at very small size
+  const base64 = compressBitmap(bitmap, 400, 0.3);
+  bitmap.close();
+  return base64;
 }
 
-function fallbackRaw(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const base64 = reader.result.split(',')[1];
-      if (!base64) reject(new Error('Failed to read image'));
-      else resolve(base64);
-    };
-    reader.onerror = () => reject(new Error('Failed to read image'));
-    reader.readAsDataURL(file);
-  });
+function compressBitmap(bitmap, maxDim, quality) {
+  const canvas = document.createElement('canvas');
+  let { width, height } = bitmap;
+
+  if (width > height && width > maxDim) {
+    height = Math.round((height * maxDim) / width);
+    width = maxDim;
+  } else if (height > maxDim) {
+    width = Math.round((width * maxDim) / height);
+    height = maxDim;
+  }
+
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0, width, height);
+  const dataUrl = canvas.toDataURL('image/jpeg', quality);
+  return dataUrl.split(',')[1] || '';
 }
 
 export function getWalmartLink(searchQuery) {

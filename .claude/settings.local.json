@@ -15,7 +15,9 @@
       "Bash(chmod +x ~/local/bin/gh)",
       "Bash(~/local/bin/gh --version)",
       "Bash(unzip -o gh.zip)",
-      "Bash(vercel --prod)"
+      "Bash(vercel --prod)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)"
     ]
   }
 }
