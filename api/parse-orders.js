@@ -100,8 +100,10 @@ export default async function handler(req, res) {
         .replace(/\s+/g, ' ')
         .trim();
 
-      // Take a generous chunk — item lists are usually in the first half of the email
-      const htmlChunk = cleanedHtml.slice(0, 15000);
+      // Send a large chunk — item data can be deep in the HTML after headers/nav
+      // After stripping styles/scripts/images/attributes, 176KB → ~30-50KB
+      // Claude Sonnet can handle up to ~100K tokens, so 50KB of HTML is fine
+      const htmlChunk = cleanedHtml.slice(0, 50000);
 
       // Parse this single email with Claude
       try {
