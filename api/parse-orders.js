@@ -1,12 +1,8 @@
-// Reads Walmart order confirmation emails from Gmail
-// and extracts structured order data (items, prices, dates).
-//
-// Uses direct fetch to Anthropic API (no SDK) to minimize cold start time.
-// Exports maxDuration config for Vercel.
+// Reads Walmart "Delivered:" emails from Gmail and extracts item data.
+// Uses regex parsing (no Claude API call needed — the text is structured).
 
-// Tell Vercel this function needs more than 10s
 export const config = {
-  maxDuration: 60,
+  maxDuration: 30,
 };
 
 export default async function handler(req, res) {
@@ -20,199 +16,154 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Gmail token required. Connect Gmail first.' });
   }
 
-  const debug = [];
-
   try {
-    // Search for order confirmation emails
-    const searchQuery = 'from:walmart.com subject:"Thanks for your delivery order" newer_than:120d';
-    const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=10`;
-    const searchResponse = await fetch(searchUrl, {
-      headers: { Authorization: `Bearer ${gmail_token}` },
-    });
+    // Search for delivery confirmation emails (these contain item-level data)
+    const searchQuery = 'from:walmart.com subject:delivered newer_than:120d';
+    let allMessageIds = [];
+    let pageToken = null;
 
-    if (!searchResponse.ok) {
-      const err = await searchResponse.json();
-      if (err.error?.code === 401) {
-        return res.status(401).json({ error: 'Gmail token expired. Please reconnect Gmail.' });
+    for (let page = 0; page < 3; page++) {
+      let searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=20`;
+      if (pageToken) searchUrl += `&pageToken=${pageToken}`;
+
+      const searchResponse = await fetch(searchUrl, {
+        headers: { Authorization: `Bearer ${gmail_token}` },
+      });
+
+      if (!searchResponse.ok) {
+        const err = await searchResponse.json();
+        if (err.error?.code === 401) {
+          return res.status(401).json({ error: 'Gmail token expired. Please reconnect Gmail.' });
+        }
+        throw new Error(err.error?.message || 'Gmail search failed');
       }
-      throw new Error(err.error?.message || 'Gmail search failed');
+
+      const searchData = await searchResponse.json();
+      if (searchData.messages) {
+        allMessageIds.push(...searchData.messages);
+      }
+
+      pageToken = searchData.nextPageToken;
+      if (!pageToken) break;
     }
 
-    const searchData = await searchResponse.json();
-    const allMessageIds = searchData.messages || [];
-    debug.push({ search: `Found ${allMessageIds.length} emails` });
-
     if (allMessageIds.length === 0) {
-      return res.status(200).json({ orders: [], message: 'No Walmart order confirmation emails found.', debug });
+      return res.status(200).json({ orders: [], message: 'No Walmart delivery emails found.' });
     }
 
     const allOrders = [];
 
-    // Process just 1 email at a time to stay within timeout
-    for (const msg of allMessageIds.slice(0, 1)) {
-      const emailDebug = { id: msg.id };
-
+    // Process up to 10 emails — no Claude call so each is fast
+    for (const msg of allMessageIds.slice(0, 10)) {
       try {
-        // Fetch email
         const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msg.id}?format=full`;
         const msgResponse = await fetch(msgUrl, {
           headers: { Authorization: `Bearer ${gmail_token}` },
         });
 
-        if (!msgResponse.ok) {
-          emailDebug.error = `fetch failed: ${msgResponse.status}`;
-          debug.push(emailDebug);
-          continue;
-        }
+        if (!msgResponse.ok) continue;
         const msgData = await msgResponse.json();
 
         const headers = msgData.payload?.headers || [];
         const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || '';
         const date = headers.find(h => h.name.toLowerCase() === 'date')?.value || '';
-        emailDebug.subject = subject;
-        emailDebug.date = date;
 
-        if (!subject.includes('Thanks for your delivery order')) {
-          emailDebug.skipped = 'subject filter';
-          debug.push(emailDebug);
-          continue;
-        }
+        // Only process "Delivered:" emails
+        if (!subject.toLowerCase().includes('delivered')) continue;
 
         // Extract HTML body
         let html = '';
         if (msgData.payload?.body?.data) {
           html = decodeBase64Url(msgData.payload.body.data);
-          emailDebug.extraction = 'direct body.data';
         } else if (msgData.payload?.parts) {
           html = await extractHtml(msgData.payload.parts, msg.id, gmail_token);
-          emailDebug.extraction = html ? 'from parts' : 'parts empty';
         }
 
-        emailDebug.rawHtmlLength = html.length;
+        if (!html) continue;
 
-        if (!html) {
-          emailDebug.error = 'no HTML body';
-          debug.push(emailDebug);
-          continue;
-        }
-
-        // Clean HTML — strip styles/scripts/images but keep structure
-        const cleanedHtml = html
+        // Strip to text content
+        const textContent = html
           .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
           .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
           .replace(/<img[^>]*>/gi, '')
           .replace(/<!--[\s\S]*?-->/g, '')
-          .replace(/\s*(style|class|id|width|height|align|valign|bgcolor|cellpadding|cellspacing|border|role|aria-\w+|data-\w+)="[^"]*"/gi, '')
-          .replace(/\s*(style|class|id|width|height|align|valign|bgcolor|cellpadding|cellspacing|border|role|aria-\w+|data-\w+)='[^']*'/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
+          .replace(/&amp;/g, '&')
+          .replace(/&dollar;/g, '$')
+          .replace(/&#36;/g, '$')
+          .replace(/&zwnj;/g, '')
+          .replace(/&reg;/gi, '®')
+          .replace(/&#?\w+;/g, ' ')
           .replace(/\s+/g, ' ')
           .trim();
 
-        const htmlChunk = cleanedHtml.slice(0, 50000);
-        emailDebug.cleanedLength = cleanedHtml.length;
-        emailDebug.chunkLength = htmlChunk.length;
+        // Parse items using regex
+        // Pattern: "Item Name $0.37/OZ Qty: 1 [$0.40 from associate discount] $3.98 [$3.12 ea]"
+        const items = parseItemsFromText(textContent);
 
-        // Call Claude API directly via fetch (no SDK = faster cold start)
-        const anthropicKey = process.env.ANTHROPIC_API_KEY;
-        if (!anthropicKey) {
-          emailDebug.error = 'ANTHROPIC_API_KEY not set';
-          debug.push(emailDebug);
-          continue;
-        }
-
-        const startTime = Date.now();
-        const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': anthropicKey,
-            'anthropic-version': '2023-06-01',
-          },
-          body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 2048,
-            system: `You extract grocery items from a Walmart order confirmation email HTML. Return ONLY valid JSON, no markdown.
-
-Extract every item listed in the email. Look for product names, quantities, and prices in the HTML structure (tables, divs, spans).
-
-Rules:
-- name: full product name as shown
-- qty: quantity (default 1 if not shown)
-- price: the price shown for that item (unit price per item, NOT multiplied by qty)
-
-Return: { "order_date": "YYYY-MM-DD", "items": [ { "name": "Product Name", "qty": 1, "price": 3.99 } ] }
-
-If you cannot find item details, return: { "order_date": "YYYY-MM-DD", "items": [] }`,
-            messages: [{
-              role: 'user',
-              content: `Extract all items from this Walmart order email.
-Subject: ${subject}
-Date: ${date}
-
-HTML content:
-${htmlChunk}`,
-            }],
-          }),
-        });
-
-        emailDebug.claudeMs = Date.now() - startTime;
-        emailDebug.claudeStatus = claudeResponse.status;
-
-        if (!claudeResponse.ok) {
-          const errBody = await claudeResponse.text();
-          emailDebug.error = `Claude API ${claudeResponse.status}: ${errBody.slice(0, 300)}`;
-          debug.push(emailDebug);
-          continue;
-        }
-
-        const claudeData = await claudeResponse.json();
-        const text = claudeData.content?.[0]?.text || '';
-        emailDebug.claudeResponseLength = text.length;
-        emailDebug.claudeResponsePreview = text.slice(0, 300);
-
-        let result;
-        try {
-          result = JSON.parse(text);
-        } catch {
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            result = JSON.parse(jsonMatch[0]);
-          } else {
-            emailDebug.error = 'no JSON in Claude response';
-            debug.push(emailDebug);
-            continue;
-          }
-        }
-
-        emailDebug.itemsFound = result?.items?.length || 0;
-
-        if (result && result.items && result.items.length > 0) {
-          if (!result.order_date || result.order_date === 'YYYY-MM-DD') {
-            result.order_date = parseEmailDate(date);
-          }
-          allOrders.push(result);
+        if (items.length > 0) {
+          allOrders.push({
+            order_date: parseEmailDate(date),
+            items,
+          });
         }
       } catch (e) {
-        emailDebug.error = `${e.constructor?.name || 'Error'}: ${e.message}`;
+        console.error(`Failed to parse email ${msg.id}:`, e.message);
+        continue;
       }
-
-      debug.push(emailDebug);
     }
 
+    // Sort orders by date (newest first)
     allOrders.sort((a, b) => new Date(b.order_date) - new Date(a.order_date));
 
     return res.status(200).json({
       orders: allOrders,
       emails_found: allMessageIds.length,
       orders_parsed: allOrders.length,
-      debug,
     });
   } catch (error) {
-    return res.status(500).json({
-      error: 'Failed to parse orders',
-      message: error.message,
-      debug,
-    });
+    return res.status(500).json({ error: 'Failed to parse orders', message: error.message });
   }
+}
+
+function parseItemsFromText(text) {
+  const items = [];
+
+  // Find the items section — between "arrived" and "See all items" or "How was"
+  const startMatch = text.match(/\d+ items? arrived/i);
+  if (!startMatch) return items;
+
+  const startIdx = startMatch.index + startMatch[0].length;
+  const endMatch = text.slice(startIdx).match(/See all items|How was your delivery|Payment method/i);
+  const itemSection = endMatch
+    ? text.slice(startIdx, startIdx + endMatch.index)
+    : text.slice(startIdx, startIdx + 3000);
+
+  // Match each item: name, per-unit price, qty, optional discount, total price, optional ea price
+  // Example: "Great Value Whole Vitamin D Milk, Gallon, 128 fl oz $0.03/FOZ Qty: 2 $0.64 from associate discount $6.24 $3.12 ea"
+  const itemRegex = /([A-Z][^$]+?)\s+\$[\d.]+\/\w+\s+Qty:\s*(\d+)(?:\s+\$[\d.]+\s+from associate discount)?\s+\$([\d.]+)(?:\s+\$([\d.]+)\s+ea)?/gi;
+
+  let match;
+  while ((match = itemRegex.exec(itemSection)) !== null) {
+    const name = match[1].replace(/Sold and Fulfilled by Walmart\s*/i, '').trim();
+    const qty = parseInt(match[2], 10);
+    const totalPrice = parseFloat(match[3]);
+    const eaPrice = match[4] ? parseFloat(match[4]) : null;
+
+    // Use per-item price: ea price if available, otherwise total/qty
+    const unitPrice = eaPrice || (qty > 1 ? totalPrice / qty : totalPrice);
+
+    if (name && !isNaN(unitPrice)) {
+      items.push({
+        name,
+        qty,
+        price: Math.round(unitPrice * 100) / 100,
+      });
+    }
+  }
+
+  return items;
 }
 
 function parseEmailDate(dateStr) {
