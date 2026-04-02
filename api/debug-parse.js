@@ -114,10 +114,7 @@ export default async function handler(req, res) {
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Extract all dollar amounts found in the cleaned HTML
-    const priceMatches = cleanedHtml.match(/\$\d+\.\d{2}/g) || [];
-
-    // Strip ALL tags to get pure text content — this shows us what's actually in the email
+    // Strip ALL tags to get pure text content
     const textContent = cleanedHtml
       .replace(/<[^>]+>/g, ' ')
       .replace(/&nbsp;/g, ' ')
@@ -129,7 +126,6 @@ export default async function handler(req, res) {
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Extract all dollar amounts
     const priceMatches = textContent.match(/\$\d+\.\d{2}/g) || [];
 
     step('6_content_analysis', {
