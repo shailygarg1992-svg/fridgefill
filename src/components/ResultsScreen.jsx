@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { FREE_DELIVERY_THRESHOLD, DELIVERY_FEE } from '../data/staples'
 import { getWalmartLink } from '../utils/api'
+import FillCartButton from './FillCartButton'
 
 // Get the per-unit price from an item, handling both old and new field names
 function getUnitPrice(item) {
@@ -200,17 +201,22 @@ export default function ResultsScreen({ results, onBack }) {
               {activeTotal >= FREE_DELIVERY_THRESHOLD ? 'Free delivery' : `+ $${DELIVERY_FEE} delivery`}
             </p>
           </div>
-          <button
-            onClick={() => {
-              const active = [...allRestock, ...fillers].filter((i) => !dismissedIds.has(i.item))
-              if (active.length > 0) {
-                window.open(getWalmartLink(active[0].item), '_blank')
-              }
-            }}
-            className="px-5 py-2.5 bg-blue-600 text-white font-semibold rounded-xl text-sm"
-          >
-            Open Walmart
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                const active = [...allRestock, ...fillers].filter((i) => !dismissedIds.has(i.item))
+                if (active.length > 0) {
+                  window.open(getWalmartLink(active[0].item), '_blank')
+                }
+              }}
+              className="px-4 py-2.5 bg-gray-200 text-gray-700 font-semibold rounded-xl text-sm"
+            >
+              Browse
+            </button>
+            <FillCartButton
+              restockList={[...allRestock, ...fillers].filter((i) => !dismissedIds.has(i.item))}
+            />
+          </div>
         </div>
       </div>
     </div>
