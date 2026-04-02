@@ -8,6 +8,9 @@
     },
     "api/analyze-fridge.js": {
       "maxDuration": 30
+    },
+    "api/debug-parse.js": {
+      "maxDuration": 60
     }
   },
   "rewrites": [

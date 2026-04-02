@@ -1,0 +1,284 @@
+// Diagnostic endpoint — mirrors parse-orders.js step-by-step but reports
+// exactly what happens at each stage instead of silently continuing.
+// Hit POST /api/debug-parse with { "gmail_token": "..." } to diagnose.
+
+import Anthropic from '@anthropic-ai/sdk';
+
+export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  const { gmail_token } = req.body;
+  if (!gmail_token) {
+    return res.status(400).json({ error: 'No gmail_token in request body' });
+  }
+
+  const report = { steps: [], timestamp: new Date().toISOString() };
+
+  function step(name, data) {
+    report.steps.push({ step: name, ...data });
+  }
+
+  try {
+    // STEP 1: Validate token
+    const profileRes = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/profile', {
+      headers: { Authorization: `Bearer ${gmail_token}` },
+    });
+    const profile = await profileRes.json();
+    step('1_token_check', {
+      ok: profileRes.ok,
+      status: profileRes.status,
+      email: profile.emailAddress || null,
+      error: profile.error?.message || null,
+    });
+    if (!profileRes.ok) {
+      return res.status(200).json(report);
+    }
+
+    // STEP 2: Search for order emails
+    const searchQuery = 'from:walmart.com subject:"Thanks for your delivery order" newer_than:120d';
+    const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=10`;
+    const searchRes = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${gmail_token}` },
+    });
+    const searchData = await searchRes.json();
+    const messageCount = searchData.messages?.length || 0;
+    step('2_search', {
+      ok: searchRes.ok,
+      query: searchQuery,
+      messages_found: messageCount,
+      estimated_total: searchData.resultSizeEstimate || 0,
+      error: searchData.error?.message || null,
+    });
+    if (messageCount === 0) {
+      return res.status(200).json(report);
+    }
+
+    // STEP 3: Fetch first email metadata
+    const msgId = searchData.messages[0].id;
+    const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`;
+    const msgRes = await fetch(msgUrl, {
+      headers: { Authorization: `Bearer ${gmail_token}` },
+    });
+    const msgData = await msgRes.json();
+
+    const headers = msgData.payload?.headers || [];
+    const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || '';
+    const date = headers.find(h => h.name.toLowerCase() === 'date')?.value || '';
+
+    step('3_fetch_email', {
+      ok: msgRes.ok,
+      message_id: msgId,
+      subject,
+      date,
+      passes_subject_filter: subject.includes('Thanks for your delivery order'),
+    });
+
+    // STEP 4: Analyze MIME structure in detail
+    const mimeInfo = deepMimeAnalysis(msgData.payload);
+    step('4_mime_structure', mimeInfo);
+
+    // STEP 5: Try to extract HTML body
+    let html = '';
+    let extractionMethod = 'none';
+
+    if (msgData.payload?.body?.data) {
+      html = decodeBase64Url(msgData.payload.body.data);
+      extractionMethod = 'payload.body.data (direct)';
+    } else if (msgData.payload?.parts) {
+      // Try to find HTML part and report what we find
+      const partInfo = await findHtmlPart(msgData.payload.parts, msgId, gmail_token);
+      html = partInfo.html;
+      extractionMethod = partInfo.method;
+    }
+
+    step('5_html_extraction', {
+      method: extractionMethod,
+      html_length: html.length,
+      html_first_200: html.slice(0, 200),
+      has_html_tags: html.includes('<'),
+      has_table_tags: html.includes('<table') || html.includes('<TABLE'),
+      has_dollar_signs: html.includes('$'),
+    });
+
+    if (!html) {
+      step('5b_no_html', { message: 'Could not extract any HTML body. Check MIME structure above.' });
+      return res.status(200).json(report);
+    }
+
+    // STEP 6: Clean HTML
+    const cleanedHtml = html
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<img[^>]*>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/\s*(style|class|id|width|height|align|valign|bgcolor|cellpadding|cellspacing|border|role|aria-\w+|data-\w+)="[^"]*"/gi, '')
+      .replace(/\s*(style|class|id|width|height|align|valign|bgcolor|cellpadding|cellspacing|border|role|aria-\w+|data-\w+)='[^']*'/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const htmlChunk = cleanedHtml.slice(0, 50000);
+
+    step('6_clean_html', {
+      raw_html_length: html.length,
+      cleaned_html_length: cleanedHtml.length,
+      chunk_length: htmlChunk.length,
+      cleaned_first_500: cleanedHtml.slice(0, 500),
+      cleaned_has_dollar_signs: cleanedHtml.includes('$'),
+      cleaned_has_price_pattern: /\$\d+\.\d{2}/.test(cleanedHtml),
+    });
+
+    // STEP 7: Send to Claude
+    try {
+      const client = new Anthropic();
+      const claudeRes = await client.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 2048,
+        system: `You extract grocery items from a Walmart order confirmation email HTML. Return ONLY valid JSON.
+
+Extract every item listed in the email. Look for product names, quantities, and prices in the HTML structure (tables, divs, spans).
+
+Rules:
+- name: full product name as shown
+- qty: quantity (default 1 if not shown)
+- price: the price shown for that item (unit price per item, NOT multiplied by qty)
+
+Return: { "order_date": "YYYY-MM-DD", "items": [ { "name": "Product Name", "qty": 1, "price": 3.99 } ] }
+
+If you cannot find item details, return: { "order_date": "YYYY-MM-DD", "items": [] }`,
+        messages: [{
+          role: 'user',
+          content: `Extract all items from this Walmart order email.
+Subject: ${subject}
+Date: ${date}
+
+HTML content:
+${htmlChunk}`,
+        }],
+      });
+
+      const claudeText = claudeRes.content[0].text;
+
+      let parsed = null;
+      let parseError = null;
+      try {
+        parsed = JSON.parse(claudeText);
+      } catch {
+        const jsonMatch = claudeText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          try {
+            parsed = JSON.parse(jsonMatch[0]);
+          } catch (e2) {
+            parseError = e2.message;
+          }
+        } else {
+          parseError = 'No JSON object found in Claude response';
+        }
+      }
+
+      step('7_claude_response', {
+        ok: true,
+        raw_response_length: claudeText.length,
+        raw_response_first_500: claudeText.slice(0, 500),
+        parsed_ok: !!parsed,
+        parse_error: parseError,
+        items_count: parsed?.items?.length || 0,
+        order_date: parsed?.order_date || null,
+        first_3_items: parsed?.items?.slice(0, 3) || [],
+      });
+    } catch (e) {
+      step('7_claude_response', {
+        ok: false,
+        error: e.message,
+        error_type: e.constructor.name,
+      });
+    }
+
+    return res.status(200).json(report);
+  } catch (error) {
+    step('fatal_error', { error: error.message, stack: error.stack?.split('\n').slice(0, 3) });
+    return res.status(200).json(report);
+  }
+}
+
+function decodeBase64Url(data) {
+  const base64 = data.replace(/-/g, '+').replace(/_/g, '/');
+  return Buffer.from(base64, 'base64').toString('utf-8');
+}
+
+function deepMimeAnalysis(payload, depth = 0) {
+  if (!payload) return { type: 'null' };
+  const info = {
+    mimeType: payload.mimeType,
+    bodySize: payload.body?.size || 0,
+    hasBodyData: !!(payload.body?.data),
+    bodyDataLength: payload.body?.data?.length || 0,
+    hasAttachmentId: !!(payload.body?.attachmentId),
+    attachmentId: payload.body?.attachmentId || null,
+  };
+  if (payload.parts && depth < 4) {
+    info.parts = payload.parts.map(p => deepMimeAnalysis(p, depth + 1));
+  }
+  return info;
+}
+
+async function findHtmlPart(parts, messageId, token, depth = 0) {
+  // First pass: look for text/html
+  for (const part of parts) {
+    if (part.mimeType === 'text/html') {
+      if (part.body?.data) {
+        return { html: decodeBase64Url(part.body.data), method: `text/html with inline data (depth=${depth})` };
+      }
+      if (part.body?.attachmentId) {
+        // Fetch via attachments API
+        const attUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${part.body.attachmentId}`;
+        try {
+          const attRes = await fetch(attUrl, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (attRes.ok) {
+            const attData = await attRes.json();
+            if (attData.data) {
+              return { html: decodeBase64Url(attData.data), method: `text/html via attachmentId (depth=${depth}, size=${part.body.size})` };
+            }
+            return { html: '', method: `text/html attachmentId fetch OK but no data (depth=${depth})` };
+          }
+          return { html: '', method: `text/html attachmentId fetch failed: ${attRes.status} (depth=${depth})` };
+        } catch (e) {
+          return { html: '', method: `text/html attachmentId fetch error: ${e.message} (depth=${depth})` };
+        }
+      }
+      return { html: '', method: `text/html found but no data and no attachmentId (bodySize=${part.body?.size}, depth=${depth})` };
+    }
+  }
+
+  // Recurse into nested parts
+  for (const part of parts) {
+    if (part.parts && depth < 4) {
+      const found = await findHtmlPart(part.parts, messageId, token, depth + 1);
+      if (found.html) return found;
+    }
+  }
+
+  // Fallback: plain text
+  for (const part of parts) {
+    if (part.mimeType === 'text/plain') {
+      if (part.body?.data) {
+        return { html: decodeBase64Url(part.body.data), method: `FALLBACK: text/plain with inline data (depth=${depth})` };
+      }
+      if (part.body?.attachmentId) {
+        const attUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${messageId}/attachments/${part.body.attachmentId}`;
+        try {
+          const attRes = await fetch(attUrl, { headers: { Authorization: `Bearer ${token}` } });
+          if (attRes.ok) {
+            const attData = await attRes.json();
+            if (attData.data) return { html: decodeBase64Url(attData.data), method: `FALLBACK: text/plain via attachmentId (depth=${depth})` };
+          }
+        } catch {}
+      }
+    }
+  }
+
+  return { html: '', method: `nothing found at depth=${depth}` };
+}
