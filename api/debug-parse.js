@@ -117,23 +117,34 @@ export default async function handler(req, res) {
     // Extract all dollar amounts found in the cleaned HTML
     const priceMatches = cleanedHtml.match(/\$\d+\.\d{2}/g) || [];
 
-    step('6_clean_html', {
+    // Strip ALL tags to get pure text content — this shows us what's actually in the email
+    const textContent = cleanedHtml
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&dollar;/g, '$')
+      .replace(/&#36;/g, '$')
+      .replace(/&zwnj;/g, '')
+      .replace(/&#?\w+;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    // Extract all dollar amounts
+    const priceMatches = textContent.match(/\$\d+\.\d{2}/g) || [];
+
+    step('6_content_analysis', {
       raw_html_length: html.length,
       cleaned_html_length: cleanedHtml.length,
-      chunk_would_be: Math.min(cleanedHtml.length, 50000),
-      cleaned_first_500: cleanedHtml.slice(0, 500),
+      text_content_length: textContent.length,
       prices_found: priceMatches.length,
-      sample_prices: priceMatches.slice(0, 10),
-    });
-
-    // STEP 7: Try plain text extraction to compare
-    let plainText = '';
-    if (msgData.payload?.parts) {
-      plainText = await findPlainText(msgData.payload.parts, msgId, gmail_token);
-    }
-    step('7_plain_text_comparison', {
-      plain_text_length: plainText.length,
-      plain_text_first_300: plainText.slice(0, 300),
+      all_prices: priceMatches,
+      // Show multiple sections of the text to find where items are
+      text_0_to_1000: textContent.slice(0, 1000),
+      text_1000_to_2000: textContent.slice(1000, 2000),
+      text_2000_to_3000: textContent.slice(2000, 3000),
+      text_3000_to_4000: textContent.slice(3000, 4000),
+      text_4000_to_5000: textContent.slice(4000, 5000),
+      text_last_1000: textContent.slice(-1000),
     });
 
     return res.status(200).json(report);
