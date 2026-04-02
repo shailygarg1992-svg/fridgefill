@@ -33,41 +33,61 @@ export default async function handler(req, res) {
       return res.status(200).json(report);
     }
 
-    // STEP 2: Search for ALL Walmart emails to find which types have item details
-    const queries = [
-      { label: 'All walmart emails', q: 'from:walmart.com newer_than:120d' },
-      { label: 'Receipt emails', q: 'from:walmart.com subject:receipt newer_than:120d' },
-      { label: 'Delivered emails', q: 'from:walmart.com subject:delivered newer_than:120d' },
-      { label: 'Order ready', q: 'from:walmart.com subject:"order is" newer_than:120d' },
-      { label: 'Substitution', q: 'from:walmart.com subject:substitut newer_than:120d' },
-      { label: 'Arriving', q: 'from:walmart.com subject:arriving newer_than:120d' },
-    ];
+    // STEP 2: Fetch a "Delivered:" email and check its content
+    const searchQuery = 'from:walmart.com subject:delivered newer_than:120d';
+    const searchUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(searchQuery)}&maxResults=5`;
+    const searchRes = await fetch(searchUrl, { headers: { Authorization: `Bearer ${gmail_token}` } });
+    const searchData = await searchRes.json();
+    const messageCount = searchData.messages?.length || 0;
+    step('2_search', { query: searchQuery, found: messageCount });
 
-    for (const { label, q } of queries) {
-      const url = `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(q)}&maxResults=5`;
-      const res2 = await fetch(url, { headers: { Authorization: `Bearer ${gmail_token}` } });
-      const data = await res2.json();
-      const count = data.messages?.length || 0;
+    if (messageCount === 0) return res.status(200).json(report);
 
-      // Get subjects of found emails
-      const subjects = [];
-      if (data.messages) {
-        for (const m of data.messages.slice(0, 5)) {
-          const mRes = await fetch(
-            `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata&metadataHeaders=Subject&metadataHeaders=Date`,
-            { headers: { Authorization: `Bearer ${gmail_token}` } }
-          );
-          const mData = await mRes.json();
-          const h = mData.payload?.headers || [];
-          subjects.push({
-            subject: h.find(x => x.name === 'Subject')?.value,
-            date: h.find(x => x.name === 'Date')?.value,
-          });
-        }
-      }
+    // STEP 3: Fetch the second delivered email (has 22 items — good test)
+    const msgId = searchData.messages[1]?.id || searchData.messages[0].id;
+    const msgUrl = `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgId}?format=full`;
+    const msgRes2 = await fetch(msgUrl, { headers: { Authorization: `Bearer ${gmail_token}` } });
+    const msgData = await msgRes2.json();
+    const headers = msgData.payload?.headers || [];
+    const subject = headers.find(h => h.name.toLowerCase() === 'subject')?.value || '';
+    const date = headers.find(h => h.name.toLowerCase() === 'date')?.value || '';
+    step('3_email', { subject, date });
 
-      step(`2_search_${label}`, { query: q, found: count, subjects });
+    // STEP 4: Extract HTML
+    let html = '';
+    if (msgData.payload?.body?.data) {
+      html = decodeBase64Url(msgData.payload.body.data);
+    } else if (msgData.payload?.parts) {
+      const partInfo = await findHtmlPart(msgData.payload.parts, msgId, gmail_token);
+      html = partInfo.html;
     }
+
+    // STEP 5: Strip to text and show content
+    const cleaned = html
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<img[^>]*>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&dollar;/g, '$')
+      .replace(/&#36;/g, '$')
+      .replace(/&zwnj;/g, '')
+      .replace(/&#?\w+;/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const prices = cleaned.match(/\$\d+\.\d{2}/g) || [];
+    step('5_content', {
+      html_length: html.length,
+      text_length: cleaned.length,
+      prices_count: prices.length,
+      all_prices: prices.slice(0, 30),
+      text_0_to_1500: cleaned.slice(0, 1500),
+      text_1500_to_3000: cleaned.slice(1500, 3000),
+      text_3000_to_4500: cleaned.slice(3000, 4500),
+    });
 
     return res.status(200).json(report);
   } catch (error) {
