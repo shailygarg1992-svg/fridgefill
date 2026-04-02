@@ -146,7 +146,10 @@ function parseItemsFromText(text) {
 
   let match;
   while ((match = itemRegex.exec(itemSection)) !== null) {
-    const name = match[1].replace(/Sold and Fulfilled by Walmart\s*/i, '').trim();
+    const name = match[1]
+      .replace(/Sold and Fulfilled by Walmart\s*/i, '')
+      .replace(/^ea\s+/i, '')  // Remove stray "ea " prefix from previous item's "$X.XX ea"
+      .trim();
     const qty = parseInt(match[2], 10);
     const totalPrice = parseFloat(match[3]);
     const eaPrice = match[4] ? parseFloat(match[4]) : null;
