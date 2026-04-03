@@ -13,7 +13,7 @@ FridgeFill Phase 1 MVP — a React PWA that lets you photograph your fridge, use
 - **Backend:** Vercel Serverless Functions (Node.js)
 - **AI:** Claude Sonnet (claude-sonnet-4-20250514) with vision
 - **Hosting:** Vercel
-- **Repo:** https://github.com/shailygarg1992-svg/fridgefill
+- **Repo:** https://github.com/shailygarg1992/fridgefill
 - **Live URL:** https://fridgefill.vercel.app
 
 ## Features Implemented
@@ -243,7 +243,7 @@ After building the Gmail integration, "Refresh Orders" returned zero orders ever
 5. **`export const config` vs `vercel.json`:** For Vercel serverless function settings, in-file exports are more reliable than vercel.json `functions` config.
 
 ## Accounts & Config
-- **GitHub:** shailygarg1992-svg
+- **GitHub:** shailygarg1992
 - **Vercel:** shailygarg1992-3481 (email: shailygarg1992@gmail.com)
 - **Google Cloud:** project "FridgeFill" (testing mode, shailygarg1992@gmail.com as test user)
 - **Anthropic:** $5 prepaid credits (~500 scans)

@@ -3,7 +3,7 @@
 **Date:** March 28 – April 2, 2026
 **What we built:** A working grocery restock app, from zero to deployed, across multiple sessions.
 **Live URL:** https://fridgefill.vercel.app
-**GitHub:** https://github.com/shailygarg1992-svg/fridgefill
+**GitHub:** https://github.com/shailygarg1992/fridgefill
 
 ---
 
