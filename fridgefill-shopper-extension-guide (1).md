@@ -23,16 +23,20 @@
 1. User scans fridge on **fridgefill.vercel.app** (works from phone or desktop)
 2. AI generates restock list on Results screen
 3. User taps **"Fill My Walmart Cart"** button
-4. PWA signs user in via Google (Firebase Auth popup) if not already signed in
+4. PWA signs user in via Google (Firebase Auth popup) — only needed once, session persists
 5. PWA writes cart request to Firestore with status `"pending"`
 6. Chrome Extension detects new pending request via Firestore real-time listener
-7. Extension updates status to `"in_progress"`
-8. For each item, extension tries:
-   - **API approach first**: Walmart autocomplete search → add to cart API
-   - **DOM fallback**: Content script automation on walmart.com tab
-9. After each item, extension updates Firestore with item status + progress
+7. Extension **automatically opens walmart.com** (or reuses existing tab)
+8. Extension updates status to `"in_progress"`
+9. For each item:
+   - Navigates walmart.com tab to `walmart.com/search?q={item}`
+   - Waits for search results to load
+   - Content script clicks first **"Add to cart"** button
+   - Updates Firestore with item status + progress
+   - Waits 2-3 seconds before next item
 10. PWA shows real-time progress bar + item-by-item status
 11. When all items processed, status set to `"completed"` or `"failed"`
+12. User can watch items being added visually on the Walmart tab
 
 ---
 
@@ -119,8 +123,8 @@ users/{userId}/cart_requests/{requestId}
 ```
 fridgefill-extension/
 ├── src/
-│   ├── background.js       ← Core: Firestore listener + Walmart API + content script fallback
-│   ├── content.js           ← DOM automation fallback on walmart.com
+│   ├── background.js       ← Core: Firestore listener + opens walmart.com + orchestrates item adds
+│   ├── content.js           ← DOM automation on walmart.com (clicks "Add to cart")
 │   ├── popup.js             ← Popup UI logic + auth + status updates
 │   └── firebase.js          ← Firebase init + chrome.identity sign-in
 ├── dist/                    ← Webpack output (3 bundles)
@@ -157,19 +161,21 @@ fridgefill-extension/
 1. On startup, signs in via `chrome.identity.getAuthToken()` → Firebase `signInWithCredential()`
 2. Listens to Firestore query: `users/{uid}/cart_requests` where `status == "pending"`
 3. On new request, calls `processCartRequest()`:
+   - **Opens walmart.com** automatically (or reuses existing tab)
    - Updates status to `"in_progress"`
-   - Loops through items with 2-3s delay between each
-   - **API approach**: `fetch()` to Walmart autocomplete + cart API with `credentials: "include"`
-   - **Fallback**: Opens walmart.com tab, sends message to content.js for DOM automation
+   - For each item: navigates tab to `walmart.com/search?q={item}`, waits 3s for load
+   - Sends `ADD_FIRST_ITEM` message to content script to click "Add to cart"
    - Updates Firestore after each item with status + progress
+   - Waits 2-3s between items to avoid rate limiting
    - Sets final status to `"completed"` or `"failed"`
 4. Broadcasts status updates to popup via `chrome.runtime.sendMessage()`
 
-### content.js — DOM Fallback
-- Listens for `SEARCH_AND_ADD` messages from background
-- Searches: finds search input, sets value, submits form
-- Waits for results via `MutationObserver` with 10s timeout
-- Clicks first "Add to cart" button matching `button[aria-label*="Add to cart"]`
+### content.js — DOM Automation
+- Listens for `ADD_FIRST_ITEM` messages from background (primary flow)
+- Also supports legacy `SEARCH_AND_ADD` messages (fallback)
+- Waits for "Add to cart" button via `MutationObserver` with 12s timeout
+- Scrolls button into view, then clicks it
+- Selectors: `button[aria-label*="Add to cart"]`, `button[data-testid="add-to-cart-button"]`, `[data-automation-id="add-to-cart"]`
 - Returns `{ success: true/false, reason }`
 
 ### popup.html — Extension UI
@@ -209,9 +215,12 @@ npm run build    # webpack → dist/
 6. Extension auto-detects the request and starts adding items
 
 ### Important Behaviors
-- **Phone + Laptop**: You can tap the button from your phone. The request waits in Firestore. When your laptop is awake with Chrome running, the extension picks it up and processes it. Progress shows on your phone in real-time.
+- **Fully automatic**: Tap "Fill My Walmart Cart" → extension opens walmart.com and adds items visually. No manual Walmart interaction needed.
+- **Auth persists**: Google sign-in on PWA only needed once — session persists across page loads and browser restarts.
+- **Phone + Laptop**: You can tap the button from your phone. The request waits in Firestore. When your laptop is awake with Chrome running, the extension picks it up, opens walmart.com, and starts adding items. Progress shows on your phone in real-time.
 - **Laptop asleep**: Extension won't process requests while laptop is sleeping. Requests persist in Firestore and will be picked up when Chrome is running again.
 - **Multiple requests**: Extension processes one request at a time, in order received.
+- **Visual feedback**: You can watch items being searched and added on the Walmart tab in real-time.
 
 ---
 
